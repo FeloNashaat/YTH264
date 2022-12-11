@@ -1,12 +1,16 @@
 // ignore: file_names
 
 import 'dart:async';
+import 'dart:isolate';
 
+import 'package:YT_H264/Services/DownloadManager.dart';
 import 'package:flutter/material.dart';
 import 'package:YT_H264/Screens/AddPopup.dart';
 import 'package:YT_H264/Services/QueueObject.dart';
 import 'package:YT_H264/Widgets/QueueWidget.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+
+import '../Services/DownloadObject.dart';
 
 class QueuePage extends StatefulWidget {
   GlobalKey<AnimatedListState> listkey = GlobalKey<AnimatedListState>();
@@ -20,9 +24,21 @@ class QueuePage extends StatefulWidget {
 
 class _QueuePageState extends State<QueuePage> {
   late StreamSubscription _intentDataStreamSubscription;
+  late StreamSubscription downloadsubscription;
   String? _sharedText;
   void initState() {
     super.initState();
+    downloadsubscription = DownloadManager.downloadStream.listen((value) async {
+      DownloadObject obj = value as DownloadObject;
+      ReceivePort rc = ReceivePort();
+      obj.streamPort = rc.sendPort;
+      await Isolate.spawn<DownloadObject>(
+          DownloadManager.donwloadVideoFromYoutube, obj);
+      downloadsubscription.pause();
+      rc.listen((message) {
+        downloadsubscription.resume();
+      });
+    });
     _intentDataStreamSubscription =
         ReceiveSharingIntent.getTextStream().listen((String value) {
       setState(() {

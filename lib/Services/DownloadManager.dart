@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'package:YT_H264/Services/DownloadObject.dart';
 import 'package:YT_H264/Services/GlobalMethods.dart';
 import 'package:ffmpeg_kit_flutter_full/return_code.dart';
 import 'package:flutter/widgets.dart';
@@ -13,21 +15,34 @@ import '../Widgets/QueueWidget.dart';
 import 'QueueObject.dart';
 
 class DownloadManager {
+  static StreamController<DownloadObject> downloadStreamController =
+      StreamController<DownloadObject>();
+  static Stream downloadStream = downloadStreamController.stream;
+  static bool isDownloading = false;
+
+  //// void registerInQueue(Map<String, dynamic> downloadData) {
+  ////   if (downloadQueue.isEmpty) {
+  ////     downloadQueue.add(downloadData);
+  //     // donwloadVideoFromYoutube(args)
+  ////   }
+  ////   downloadQueue.add(downloadData);
+  //// }
+
   @pragma('vm:entry-point')
-  static void donwloadVideoFromYoutube(Map<String, dynamic> args) async {
-    final SendPort sd = args['port'];
+  static void donwloadVideoFromYoutube(DownloadObject args) async {
+    final SendPort sd = args.port;
     ReceivePort rc = ReceivePort();
     sd.send([rc.sendPort]);
     rc.listen(((message) {
+      args.streamPort!.send([]);
       Isolate.exit();
     }));
 
-    // TODO: Android Permissions
     print('Starting Download');
     final yt = YoutubeExplode();
     double progress = 0;
     String? vidDir, audioDir;
-    String title = args['ytObj'].title as String;
+    String title = args.ytData.title;
     title = title
         .replaceAll(r'\', '')
         .replaceAll('/', '')
@@ -42,22 +57,26 @@ class DownloadManager {
         .replaceAll('"', '');
     title = RemoveEmoji().removemoji(title);
 
-    if (args['ytObj'].downloadType == DownloadType.VideoOnly ||
-        args['ytObj'].downloadType == DownloadType.Muxed) {
+    if (args.ytData.downloadType == DownloadType.VideoOnly ||
+        args.ytData.downloadType == DownloadType.Muxed) {
       try {
-        var stream = yt.videos.streamsClient.get(args['ytObj'].stream);
-        final size = args['ytObj'].stream.size.totalBytes;
+        var stream =
+            yt.videos.streamsClient.get(args.ytData.stream as StreamInfo);
+        final size = args.ytData.stream!.size.totalBytes;
         var count = 0;
         String? fileDir;
         Directory? directory;
-        if (args['ytObj'].downloadType == DownloadType.VideoOnly) {
-          directory = args['downloads'];
+        if (args.ytData.downloadType == DownloadType.VideoOnly) {
+          directory = args.downloads;
         } else {
-          directory = args['temp'];
+          directory = args.tmp;
         }
         fileDir =
-            '${directory!.path}/$title.${args['ytObj'].stream.container.name}';
+            '${directory.path}/$title.${args.ytData.stream!.container.name}';
         vidDir = fileDir;
+        if (await File(fileDir).exists()) {
+          await File(fileDir).delete();
+        }
         File vidFile = await File(fileDir).create(recursive: true);
         var fileStream = vidFile.openWrite(mode: FileMode.writeOnlyAppend);
         await for (var bytes in stream) {
@@ -65,7 +84,7 @@ class DownloadManager {
           count += bytes.length;
           var currentProgress = ((count / size) * 100);
           progress = currentProgress;
-          if (args['ytObj'].downloadType == DownloadType.Muxed) {
+          if (args.ytData.downloadType == DownloadType.Muxed) {
             currentProgress = progress / 2;
           }
           print(currentProgress);
@@ -73,27 +92,31 @@ class DownloadManager {
         }
       } catch (e) {
         sd.send([e.toString()]);
+        args.streamPort!.send([]);
+        Isolate.exit();
       }
     }
 
-    if (args['ytObj'].downloadType == DownloadType.AudioOnly ||
-        args['ytObj'].downloadType == DownloadType.Muxed) {
+    if (args.ytData.downloadType == DownloadType.AudioOnly ||
+        args.ytData.downloadType == DownloadType.Muxed) {
       try {
-        final audioStream =
-            yt.videos.streamsClient.get(args['ytObj'].bestAudio);
-        final size = args['ytObj'].bestAudio.size.totalBytes;
+        final audioStream = yt.videos.streamsClient.get(args.ytData.bestAudio);
+        final size = args.ytData.bestAudio.size.totalBytes;
         var count = 0;
         String? fileDir;
         Directory? directory;
-        if (args['ytObj'].downloadType == DownloadType.AudioOnly) {
-          directory = args['downloads'];
+        if (args.ytData.downloadType == DownloadType.AudioOnly) {
+          directory = args.downloads;
         } else {
-          directory = args['temp'];
+          directory = args.tmp;
         }
 
         fileDir =
-            '${directory!.path}/$title.${args['ytObj'].bestAudio.container.name}';
+            '${directory.path}/$title.${args.ytData.bestAudio.container.name}';
         audioDir = fileDir;
+        if (await File(fileDir).exists()) {
+          await File(fileDir).delete();
+        }
         File audFile = await File(fileDir).create(recursive: true);
         var fileStream =
             await audFile.openWrite(mode: FileMode.writeOnlyAppend);
@@ -102,7 +125,7 @@ class DownloadManager {
           count += bytes.length;
           double currentProgress = ((count / size) * 100);
           progress = 100 + currentProgress;
-          if (args['ytObj'].downloadType == DownloadType.Muxed) {
+          if (args.ytData.downloadType == DownloadType.Muxed) {
             currentProgress = progress / 2;
           }
           print(currentProgress);
@@ -110,16 +133,19 @@ class DownloadManager {
         }
       } catch (e) {
         sd.send([e.toString()]);
+        args.streamPort!.send([]);
+        Isolate.exit();
       }
     }
 
     yt.close();
 
-    if (args['ytObj'].downloadType == DownloadType.VideoOnly) {
+    if (args.ytData.downloadType == DownloadType.VideoOnly) {
       sd.send([DownloadStatus.done, 100.0]);
     } else {
       sd.send([DownloadStatus.converting, 100.0]);
     }
+    args.streamPort!.send([]);
     Isolate.exit();
   }
 
@@ -163,7 +189,7 @@ class DownloadManager {
           !ReturnCode.isCancel(returnCode)) {
         GlobalMethods.snackBarError(session.getOutput().toString(), context);
       }
-      File old = File(audioDir.replaceAll("'", ''));
+      File old = File(audioDir.replaceAll('"', ''));
       try {
         await old.delete();
       } catch (e) {}
@@ -231,6 +257,9 @@ class DownloadManager {
 
   static void stop(DownloadStatus ds, YoutubeQueueObject queueObject,
       Directory downloads, Directory temps, SendPort? stopper) async {
+    if (stopper == null) {
+      return;
+    }
     String fixedTitle = queueObject.title
         .replaceAll(r'\', '')
         .replaceAll('/', '')
@@ -244,7 +273,7 @@ class DownloadManager {
         .replaceAll("'", '')
         .replaceAll('"', '');
     if (ds == DownloadStatus.downloading) {
-      stopper!.send(null);
+      stopper.send(null);
     } else {
       FFmpegKit.cancel();
     }

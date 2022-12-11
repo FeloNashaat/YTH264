@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:YT_H264/Services/DownloadObject.dart';
 import 'package:YT_H264/Services/GlobalMethods.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -9,7 +10,15 @@ import 'package:YT_H264/Services/DownloadManager.dart';
 import 'package:YT_H264/Services/QueueObject.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-enum DownloadStatus { waiting, inQueue, downloading, converting, done, error }
+enum DownloadStatus {
+  waiting,
+  inQueue,
+  downloading,
+  converting,
+  done,
+  error,
+  stopped
+}
 
 Future<Directory?> getTemp() async {
   Directory? dir;
@@ -53,6 +62,7 @@ class _QueueWidgetState extends State<QueueWidget> {
   ReceivePort? rc;
   SendPort? stopPort;
   bool isDownloading = false;
+  bool isStopping = false;
   Directory? downloads;
   Directory? temps;
 
@@ -65,11 +75,13 @@ class _QueueWidgetState extends State<QueueWidget> {
         return;
       }
     }
-    widget.downloadStatus = DownloadStatus.downloading;
+    setState(() {
+      widget.downloadStatus = DownloadStatus.inQueue;
+      isDownloading = true;
+      downloadButtonWidth = 30;
+    });
     temps = await getTemp();
     downloads = await getDownloads();
-    String audioDir;
-    String videoDir;
     String title = widget.ytobj.title;
     title = title
         .replaceAll(r'\', '')
@@ -81,27 +93,28 @@ class _QueueWidgetState extends State<QueueWidget> {
         .replaceAll('>', '')
         .replaceAll('|', '');
 
-    Isolate downlaoder = await Isolate.spawn<Map<String, dynamic>>(
-        DownloadManager.donwloadVideoFromYoutube, <String, dynamic>{
-      'port': rc!.sendPort,
-      'ytObj': widget.ytobj,
-      'temp': temps,
-      'downloads': downloads,
+    DownloadManager.downloadStreamController.add(DownloadObject(
+      port: rc!.sendPort,
+      ytData: widget.ytobj,
+      tmp: temps!,
+      downloads: downloads!,
       // 'showError': errorCallback
-    }).then((value) {
-      setState(() {
-        isDownloading = true;
-        downloadButtonWidth = 30;
-      });
-      return value;
-    });
+    ));
+    // .then((value) {
+    // setState(() {
+    //   isDownloading = true;
+    //   downloadButtonWidth = 30;
+    // });
+    //   return value;
+    // });
     rc!.listen((data) {
       if (data.length > 1) {
         setState(() {
           widget.downloadStatus = data[0];
           widget.progress = data[1];
           if (widget.downloadStatus == DownloadStatus.done) {
-            downlaoder.kill();
+            DownloadManager.isDownloading = false;
+            // downlaoder.kill();
             setState(() {
               isDownloading = false;
               downloadButtonWidth = 75;
@@ -121,6 +134,23 @@ class _QueueWidgetState extends State<QueueWidget> {
       } else {
         if (data[0] is SendPort) {
           stopPort = data[0];
+          if (isStopping) {
+            isStopping = false;
+            rc!.close();
+            DownloadManager.stop(widget.downloadStatus, widget.ytobj,
+                downloads!, temps!, stopPort);
+            setState(() {
+              isDownloading = false;
+              downloadButtonWidth = 75;
+              widget.downloadStatus = DownloadStatus.waiting;
+            });
+          } else {
+            setState(() {
+              widget.downloadStatus = DownloadStatus.downloading;
+              isDownloading = true;
+              downloadButtonWidth = 30;
+            });
+          }
         } else {
           GlobalMethods.snackBarError(data[0], context, isException: true);
         }
@@ -177,6 +207,11 @@ class _QueueWidgetState extends State<QueueWidget> {
         Icons.done,
         color: Colors.white,
       );
+    } else if (widget.downloadStatus == DownloadStatus.inQueue) {
+      return const Icon(
+        Icons.hourglass_full,
+        color: Colors.white,
+      );
     } else {
       return null;
     }
@@ -185,7 +220,7 @@ class _QueueWidgetState extends State<QueueWidget> {
   double? downloadButtonWidth;
   @override
   Widget build(BuildContext context) {
-    downloadButtonWidth = MediaQuery.of(context).size.width * 0.23;
+    // downloadButtonWidth = MediaQuery.of(context).size.width * 0.23;
     print('Refreshed');
     String type = '';
     if (widget.ytobj.downloadType == DownloadType.Muxed) {
@@ -318,23 +353,33 @@ class _QueueWidgetState extends State<QueueWidget> {
                           overlayColor: MaterialStateProperty.all(Colors.grey),
                         ),
                         onPressed: () {
-                          if (!isDownloading) {
+                          if (!isDownloading && !isStopping) {
                             download();
+                          } else if (isDownloading && !isStopping) {
+                            if (stopPort != null) {
+                              rc!.close();
+                              DownloadManager.stop(widget.downloadStatus,
+                                  widget.ytobj, downloads!, temps!, stopPort);
+                              setState(() {
+                                isDownloading = false;
+                                downloadButtonWidth = 75;
+                                widget.downloadStatus = DownloadStatus.waiting;
+                              });
+                            } else {
+                              setState(() {
+                                isStopping = true;
+                                isDownloading = false;
+                                downloadButtonWidth = 0;
+                                widget.downloadStatus = DownloadStatus.stopped;
+                              });
+                            }
                           } else {
-                            rc!.close();
-                            DownloadManager.stop(widget.downloadStatus,
-                                widget.ytobj, downloads!, temps!, stopPort);
-                            setState(() {
-                              isDownloading = false;
-                              downloadButtonWidth = 75;
-                              widget.downloadStatus = DownloadStatus.waiting;
-                            });
+                            return;
                           }
                         },
                         child: AnimatedContainer(
                           duration: const Duration(microseconds: 1000),
                           curve: Curves.easeIn,
-                          // width: downloadButtonWidth,
                           decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(20)),
                           child: Row(
@@ -343,7 +388,9 @@ class _QueueWidgetState extends State<QueueWidget> {
                             children: [
                               Center(
                                 child: Icon(
-                                  isDownloading ? Icons.cancel : Icons.download,
+                                  isDownloading || isStopping
+                                      ? Icons.cancel
+                                      : Icons.download,
                                   color: Colors.black,
                                   size: 12,
                                 ),
@@ -351,7 +398,7 @@ class _QueueWidgetState extends State<QueueWidget> {
                               Visibility(
                                 visible: !isDownloading,
                                 child: Text(
-                                  'Download',
+                                  !isStopping ? 'Download' : 'Stopping',
                                   style: TextStyle(
                                       color: Colors.black,
                                       fontFamily: 'Helvetica',

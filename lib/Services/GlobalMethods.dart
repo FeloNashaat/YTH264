@@ -4,6 +4,11 @@ import 'package:flutter/material.dart';
 class GlobalMethods {
   static void snackBarError(String msg, BuildContext context,
       {bool isException = false}) {
+    if (isException) {
+      print('EXCEPTION: $msg');
+    } else {
+      print('INFO: $msg');
+    }
     Flushbar(
       icon: Icon(
         Icons.error,
