@@ -19,22 +19,16 @@ class DownloadManager {
       StreamController<DownloadObject>();
   static Stream downloadStream = downloadStreamController.stream;
   static bool isDownloading = false;
-
-  //// void registerInQueue(Map<String, dynamic> downloadData) {
-  ////   if (downloadQueue.isEmpty) {
-  ////     downloadQueue.add(downloadData);
-  //     // donwloadVideoFromYoutube(args)
-  ////   }
-  ////   downloadQueue.add(downloadData);
-  //// }
-
   @pragma('vm:entry-point')
   static void donwloadVideoFromYoutube(DownloadObject args) async {
     final SendPort sd = args.port;
     ReceivePort rc = ReceivePort();
-    sd.send([rc.sendPort]);
+    sd.send({
+      'id': 0,
+      'stopPort': rc.sendPort,
+      'streamPort': args.streamPort,
+    });
     rc.listen(((message) {
-      args.streamPort!.send([]);
       Isolate.exit();
     }));
 
@@ -88,10 +82,17 @@ class DownloadManager {
             currentProgress = progress / 2;
           }
           print(currentProgress);
-          sd.send([DownloadStatus.downloading, currentProgress]);
+          sd.send({
+            'id': 1,
+            'status': DownloadStatus.downloading,
+            'progress': currentProgress,
+          });
         }
       } catch (e) {
-        sd.send([e.toString()]);
+        sd.send({
+          'id': -1,
+          'msg': e.toString(),
+        });
         args.streamPort!.send([]);
         Isolate.exit();
       }
@@ -129,10 +130,17 @@ class DownloadManager {
             currentProgress = progress / 2;
           }
           print(currentProgress);
-          sd.send([DownloadStatus.downloading, currentProgress]);
+          sd.send({
+            'id': 1,
+            'status': DownloadStatus.downloading,
+            'progress': currentProgress,
+          });
         }
       } catch (e) {
-        sd.send([e.toString()]);
+        sd.send({
+          'id': -1,
+          'msg': e.toString(),
+        });
         args.streamPort!.send([]);
         Isolate.exit();
       }
@@ -141,11 +149,12 @@ class DownloadManager {
     yt.close();
 
     if (args.ytData.downloadType == DownloadType.VideoOnly) {
-      sd.send([DownloadStatus.done, 100.0]);
+      sd.send({'id': 1, 'status': DownloadStatus.done, 'progress': 100.0});
+      args.streamPort!.send([]);
     } else {
-      sd.send([DownloadStatus.converting, 100.0]);
+      sd.send(
+          {'id': 1, 'status': DownloadStatus.converting, 'progress': 100.0});
     }
-    args.streamPort!.send([]);
     Isolate.exit();
   }
 
@@ -155,6 +164,7 @@ class DownloadManager {
       YoutubeQueueObject ytobj,
       Function callBack,
       Directory temp,
+      SendPort doneNotifier,
       BuildContext context) async {
     title = RemoveEmoji().removemoji(title);
     title = title
@@ -197,6 +207,7 @@ class DownloadManager {
         await imgfile.delete();
       }
       // print(session.)
+      doneNotifier.send([]);
       callBack();
       return;
     }, ((log) {
@@ -205,7 +216,7 @@ class DownloadManager {
   }
 
   static void mergeIntoMp4(Directory? temps, Directory? downloads, String title,
-      Function callBack, BuildContext context) {
+      Function callBack, SendPort doneNotifier, BuildContext context) {
     title = RemoveEmoji().removemoji(title);
     title = title
         .replaceAll(r'\', '')
@@ -236,6 +247,7 @@ class DownloadManager {
       await oldAudio.delete();
       File oldVideo = File(videoDir.replaceAll("'", ''));
       await oldVideo.delete();
+      doneNotifier.send([]);
       callBack();
     }, ((log) {
       print(log.getMessage());
@@ -255,8 +267,13 @@ class DownloadManager {
     }
   }
 
-  static void stop(DownloadStatus ds, YoutubeQueueObject queueObject,
-      Directory downloads, Directory temps, SendPort? stopper) async {
+  static void stop(
+      DownloadStatus ds,
+      YoutubeQueueObject queueObject,
+      Directory downloads,
+      Directory temps,
+      SendPort? stopper,
+      SendPort? streamPort) async {
     if (stopper == null) {
       return;
     }
@@ -272,11 +289,13 @@ class DownloadManager {
         .replaceAll(':', '')
         .replaceAll("'", '')
         .replaceAll('"', '');
-    if (ds == DownloadStatus.downloading) {
+    if (ds == DownloadStatus.downloading || ds == DownloadStatus.inQueue) {
       stopper.send(null);
-    } else {
+      streamPort!.send([]);
+    } else if (ds == DownloadStatus.converting) {
       FFmpegKit.cancel();
-    }
+      streamPort!.send([]);
+    } else {}
     if (queueObject.downloadType == DownloadType.AudioOnly) {
       String path = '${downloads.path}/$fixedTitle.webm';
       File file = File(path);

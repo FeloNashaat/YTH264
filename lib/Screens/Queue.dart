@@ -30,12 +30,15 @@ class _QueuePageState extends State<QueuePage> {
     super.initState();
     downloadsubscription = DownloadManager.downloadStream.listen((value) async {
       DownloadObject obj = value as DownloadObject;
+      print("DOWNLOAD ID: ${obj.id}");
       ReceivePort rc = ReceivePort();
       obj.streamPort = rc.sendPort;
       await Isolate.spawn<DownloadObject>(
           DownloadManager.donwloadVideoFromYoutube, obj);
       downloadsubscription.pause();
+      print('Stream Paused');
       rc.listen((message) {
+        print('Stream Resumed');
         downloadsubscription.resume();
       });
     });

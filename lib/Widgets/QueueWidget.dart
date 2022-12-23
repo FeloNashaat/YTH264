@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 
 import 'package:YT_H264/Services/DownloadObject.dart';
 import 'package:YT_H264/Services/GlobalMethods.dart';
@@ -47,6 +48,7 @@ class QueueWidget extends StatefulWidget {
   double progress = 0;
   final index;
   Function rmov;
+  int Cancels = 0;
   QueueWidget(
       {super.key,
       required this.ytobj,
@@ -61,8 +63,8 @@ class QueueWidget extends StatefulWidget {
 class _QueueWidgetState extends State<QueueWidget> {
   ReceivePort? rc;
   SendPort? stopPort;
+  SendPort? streamPort;
   bool isDownloading = false;
-  bool isStopping = false;
   Directory? downloads;
   Directory? temps;
 
@@ -94,6 +96,7 @@ class _QueueWidgetState extends State<QueueWidget> {
         .replaceAll('|', '');
 
     DownloadManager.downloadStreamController.add(DownloadObject(
+      id: Random().nextInt(1000),
       port: rc!.sendPort,
       ytData: widget.ytobj,
       tmp: temps!,
@@ -108,38 +111,17 @@ class _QueueWidgetState extends State<QueueWidget> {
     //   return value;
     // });
     rc!.listen((data) {
-      if (data.length > 1) {
-        setState(() {
-          widget.downloadStatus = data[0];
-          widget.progress = data[1];
-          if (widget.downloadStatus == DownloadStatus.done) {
-            DownloadManager.isDownloading = false;
-            // downlaoder.kill();
-            setState(() {
-              isDownloading = false;
-              downloadButtonWidth = 75;
-            });
-            rc!.close();
-          }
-        });
-        if (widget.ytobj.downloadType == DownloadType.AudioOnly &&
-            widget.downloadStatus == DownloadStatus.converting) {
-          DownloadManager.convertToMp3(
-              downloads, title, widget.ytobj, refresh, temps!, context);
-        } else if (widget.ytobj.downloadType == DownloadType.Muxed &&
-            widget.downloadStatus == DownloadStatus.converting) {
-          DownloadManager.mergeIntoMp4(
-              temps, downloads, title, refresh, context);
-        }
-      } else {
-        if (data[0] is SendPort) {
-          stopPort = data[0];
-          if (isStopping) {
-            isStopping = false;
+      // TODO There is obviously a better way to do that crap
+      switch (data['id']) {
+        case 0:
+          streamPort = data['streamPort'];
+          stopPort = data['stopPort'];
+          if (widget.Cancels > 0) {
             rc!.close();
             DownloadManager.stop(widget.downloadStatus, widget.ytobj,
-                downloads!, temps!, stopPort);
+                downloads!, temps!, stopPort, streamPort);
             setState(() {
+              widget.Cancels -= 1;
               isDownloading = false;
               downloadButtonWidth = 75;
               widget.downloadStatus = DownloadStatus.waiting;
@@ -151,10 +133,88 @@ class _QueueWidgetState extends State<QueueWidget> {
               downloadButtonWidth = 30;
             });
           }
-        } else {
+          break;
+        case 1:
+          if (widget.Cancels < 1) {
+            setState(() {
+              widget.downloadStatus = data['status'];
+              widget.progress = data['progress'] as double;
+              if (widget.downloadStatus == DownloadStatus.done) {
+                setState(() {
+                  isDownloading = false;
+                  downloadButtonWidth = 75;
+                });
+                rc!.close();
+              }
+            });
+            if (widget.ytobj.downloadType == DownloadType.AudioOnly &&
+                widget.downloadStatus == DownloadStatus.converting) {
+              DownloadManager.convertToMp3(downloads, title, widget.ytobj,
+                  refresh, temps!, streamPort!, context);
+            } else if (widget.ytobj.downloadType == DownloadType.Muxed &&
+                widget.downloadStatus == DownloadStatus.converting) {
+              DownloadManager.mergeIntoMp4(
+                  temps, downloads, title, refresh, streamPort!, context);
+            }
+          } else {
+            print('Status Call Blocked, Cancels =  ${widget.Cancels}');
+          }
+          break;
+        case -1:
           GlobalMethods.snackBarError(data[0], context, isException: true);
-        }
+          break;
+        default:
       }
+      // if (data.length > 1 && data[0] is DownloadStatus && widget.Cancels < 1) {
+      //     // setState(() {
+      //     //   widget.downloadStatus = data[0];
+      //     //   widget.progress = data[1];
+      //     //   if (widget.downloadStatus == DownloadStatus.done) {
+      //     //     DownloadManager.isDownloading = false;
+      //     //     // downlaoder.kill();
+      //     //     setState(() {
+      //     //       isDownloading = false;
+      //     //       downloadButtonWidth = 75;
+      //     //     });
+      //     //     rc!.close();
+      //     //   }
+      //     // });
+      //     // if (widget.ytobj.downloadType == DownloadType.AudioOnly &&
+      //     //     widget.downloadStatus == DownloadStatus.converting) {
+      //     //   DownloadManager.convertToMp3(downloads, title, widget.ytobj, refresh,
+      //     //       temps!, streamPort!, context);
+      //     // } else if (widget.ytobj.downloadType == DownloadType.Muxed &&
+      //     //     widget.downloadStatus == DownloadStatus.converting) {
+      //     //   DownloadManager.mergeIntoMp4(
+      //     //       temps, downloads, title, refresh, streamPort!, context);
+      //     // }
+      // } else {
+      //   if (data[0] is SendPort) {
+      //     // streamPort = data[1];
+      //     // stopPort = data[0];
+      //     // if (widget.Cancels > 0) {
+      //     //   rc!.close();
+      //     //   DownloadManager.stop(widget.downloadStatus, widget.ytobj,
+      //     //       downloads!, temps!, stopPort, streamPort);
+      //     //   setState(() {
+      //     //     widget.Cancels -= 1;
+      //     //     isDownloading = false;
+      //     //     downloadButtonWidth = 75;
+      //     //     widget.downloadStatus = DownloadStatus.waiting;
+      //     //   });
+      //     // } else {
+      //     //   setState(() {
+      //     //     widget.downloadStatus = DownloadStatus.downloading;
+      //     //     isDownloading = true;
+      //     //     downloadButtonWidth = 30;
+      //     //   });
+      //     // }
+      //   } else if (data[0] is String) {
+      //     // GlobalMethods.snackBarError(data[0], context, isException: true);
+      //   } else {
+      //     // print('Status Call Blocked, Cancels =  ${widget.Cancels}');
+      //   }
+      // }
     });
   }
 
@@ -172,6 +232,7 @@ class _QueueWidgetState extends State<QueueWidget> {
 
   Widget? buildStatus() {
     print('Status: ${widget.downloadStatus.toString()}');
+    //TODO Switch Statements
     if (widget.downloadStatus == DownloadStatus.downloading) {
       return Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -353,13 +414,18 @@ class _QueueWidgetState extends State<QueueWidget> {
                           overlayColor: MaterialStateProperty.all(Colors.grey),
                         ),
                         onPressed: () {
-                          if (!isDownloading && !isStopping) {
+                          if (!isDownloading) {
                             download();
-                          } else if (isDownloading && !isStopping) {
+                          } else {
                             if (stopPort != null) {
                               rc!.close();
-                              DownloadManager.stop(widget.downloadStatus,
-                                  widget.ytobj, downloads!, temps!, stopPort);
+                              DownloadManager.stop(
+                                  widget.downloadStatus,
+                                  widget.ytobj,
+                                  downloads!,
+                                  temps!,
+                                  stopPort,
+                                  streamPort);
                               setState(() {
                                 isDownloading = false;
                                 downloadButtonWidth = 75;
@@ -367,14 +433,11 @@ class _QueueWidgetState extends State<QueueWidget> {
                               });
                             } else {
                               setState(() {
-                                isStopping = true;
+                                widget.Cancels += 1;
                                 isDownloading = false;
-                                downloadButtonWidth = 0;
-                                widget.downloadStatus = DownloadStatus.stopped;
+                                widget.downloadStatus = DownloadStatus.waiting;
                               });
                             }
-                          } else {
-                            return;
                           }
                         },
                         child: AnimatedContainer(
@@ -388,9 +451,7 @@ class _QueueWidgetState extends State<QueueWidget> {
                             children: [
                               Center(
                                 child: Icon(
-                                  isDownloading || isStopping
-                                      ? Icons.cancel
-                                      : Icons.download,
+                                  isDownloading ? Icons.cancel : Icons.download,
                                   color: Colors.black,
                                   size: 12,
                                 ),
@@ -398,7 +459,7 @@ class _QueueWidgetState extends State<QueueWidget> {
                               Visibility(
                                 visible: !isDownloading,
                                 child: Text(
-                                  !isStopping ? 'Download' : 'Stopping',
+                                  'Download',
                                   style: TextStyle(
                                       color: Colors.black,
                                       fontFamily: 'Helvetica',
